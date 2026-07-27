@@ -57,6 +57,21 @@ class ApiClient {
     return Booking.fromJson(_ok(res) as Map<String, dynamic>);
   }
 
+  /// Books [quantity] general-admission tickets in [sectionId].
+  Future<Booking> createSectionBooking(int eventId, int sectionId, int quantity) async {
+    final res = await _http.post(
+      _uri('/api/bookings'),
+      headers: _headers,
+      body: jsonEncode({
+        'eventId': eventId,
+        'customerRef': Config.customerRef,
+        'sectionId': sectionId,
+        'quantity': quantity,
+      }),
+    );
+    return Booking.fromJson(_ok(res) as Map<String, dynamic>);
+  }
+
   Future<Booking> getBooking(int id) async {
     final res = await _http.get(_uri('/api/bookings/$id'), headers: _headers);
     return Booking.fromJson(_ok(res) as Map<String, dynamic>);
