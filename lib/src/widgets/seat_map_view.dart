@@ -168,6 +168,7 @@ class SeatLegend extends StatelessWidget {
         dot(SeatColors.reserved, 'Held'),
         dot(SeatColors.booked, 'Sold'),
         dot(SeatColors.selected, 'Selected'),
+        dot(const Color(0xFFA5744A), 'Table'),
       ],
     );
   }

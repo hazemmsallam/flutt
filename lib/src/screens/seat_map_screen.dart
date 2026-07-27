@@ -6,6 +6,7 @@ import '../api/api_client.dart';
 import '../models/event_summary.dart';
 import '../models/seat_map.dart';
 import '../widgets/seat_map_view.dart';
+import '../widgets/venue_3d_view.dart';
 import 'booking_screen.dart';
 
 class SeatMapScreen extends StatefulWidget {
@@ -23,6 +24,7 @@ class _SeatMapScreenState extends State<SeatMapScreen> {
   final _selected = <int>{};
   Timer? _poll;
   bool _holding = false;
+  bool _use3D = true;
 
   @override
   void initState() {
@@ -89,6 +91,10 @@ class _SeatMapScreenState extends State<SeatMapScreen> {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
+  void _toggleSeat(Seat seat) => setState(() {
+        if (!_selected.add(seat.id)) _selected.remove(seat.id);
+      });
+
   @override
   Widget build(BuildContext context) {
     final map = _map;
@@ -106,6 +112,10 @@ class _SeatMapScreenState extends State<SeatMapScreen> {
                         children: [
                           Expanded(child: Text('${map.hallName} · ${map.availableCount} available',
                               style: const TextStyle(color: Colors.black54))),
+                          _ViewToggle(
+                            use3D: _use3D,
+                            onChanged: (v) => setState(() => _use3D = v),
+                          ),
                           IconButton(
                             icon: const Icon(Icons.refresh),
                             tooltip: 'Refresh',
@@ -124,17 +134,21 @@ class _SeatMapScreenState extends State<SeatMapScreen> {
                         margin: const EdgeInsets.all(12),
                         clipBehavior: Clip.antiAlias,
                         decoration: BoxDecoration(
-                          color: Colors.white,
+                          color: _use3D ? const Color(0xFF11151C) : Colors.white,
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(color: const Color(0xFFE5E7EB)),
                         ),
-                        child: SeatMapView(
-                          map: map,
-                          selectedIds: _selected,
-                          onToggle: (seat) => setState(() {
-                            if (!_selected.add(seat.id)) _selected.remove(seat.id);
-                          }),
-                        ),
+                        child: _use3D
+                            ? Venue3DView(
+                                map: map,
+                                selectedIds: _selected,
+                                onToggle: _toggleSeat,
+                              )
+                            : SeatMapView(
+                                map: map,
+                                selectedIds: _selected,
+                                onToggle: _toggleSeat,
+                              ),
                       ),
                     ),
                   ],
@@ -187,4 +201,29 @@ class _SeatMapScreenState extends State<SeatMapScreen> {
           ),
         ),
       );
+}
+
+/// Small segmented control to switch between the 3D venue and the flat 2D map.
+class _ViewToggle extends StatelessWidget {
+  const _ViewToggle({required this.use3D, required this.onChanged});
+
+  final bool use3D;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return SegmentedButton<bool>(
+      style: const ButtonStyle(
+        visualDensity: VisualDensity.compact,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
+      showSelectedIcon: false,
+      segments: const [
+        ButtonSegment(value: true, label: Text('3D'), icon: Icon(Icons.view_in_ar, size: 16)),
+        ButtonSegment(value: false, label: Text('2D'), icon: Icon(Icons.grid_view, size: 16)),
+      ],
+      selected: {use3D},
+      onSelectionChanged: (s) => onChanged(s.first),
+    );
+  }
 }
