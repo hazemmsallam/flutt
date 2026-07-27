@@ -15,6 +15,7 @@ class SeatMap {
     required this.reservedCount,
     required this.bookedCount,
     required this.seats,
+    required this.tables,
   });
 
   final int eventId;
@@ -26,6 +27,9 @@ class SeatMap {
   final int reservedCount;
   final int bookedCount;
   final List<Seat> seats;
+
+  /// Non-bookable layout objects (tables) — display only, never selectable.
+  final List<VenueTable> tables;
 
   factory SeatMap.fromJson(Map<String, dynamic> j) => SeatMap(
         eventId: j['eventId'] as int,
@@ -39,6 +43,64 @@ class SeatMap {
         seats: ((j['seats'] as List?) ?? const [])
             .map((e) => Seat.fromJson(e as Map<String, dynamic>))
             .toList(),
+        tables: ((j['layoutObjects'] as List?) ?? const [])
+            .map((e) => VenueTable.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
+}
+
+enum TableShape { square, rectangle, circle }
+
+TableShape tableShapeOf(String? s) {
+  switch (s) {
+    case 'RECTANGLE':
+      return TableShape.rectangle;
+    case 'CIRCLE':
+      return TableShape.circle;
+    default:
+      return TableShape.square;
+  }
+}
+
+/// A non-bookable table in the venue layout. Shares the seat coordinate space
+/// (top-left [x],[y] with footprint [w] x [d]) and adds the extra 3D dimensions
+/// the admin editor stores: [z] elevation off the floor and physical [height].
+class VenueTable {
+  VenueTable({
+    required this.id,
+    required this.shape,
+    required this.label,
+    required this.x,
+    required this.y,
+    required this.z,
+    required this.w,
+    required this.d,
+    required this.height,
+    required this.rotation,
+  });
+
+  final int? id;
+  final TableShape shape;
+  final String? label;
+  final double x;
+  final double y;
+  final double z;
+  final double w;
+  final double d;
+  final double height;
+  final double rotation; // degrees
+
+  factory VenueTable.fromJson(Map<String, dynamic> j) => VenueTable(
+        id: j['id'] as int?,
+        shape: tableShapeOf(j['shape'] as String?),
+        label: j['label'] as String?,
+        x: _d(j['layoutX'], 0),
+        y: _d(j['layoutY'], 0),
+        z: _d(j['layoutZ'], 0),
+        w: _d(j['layoutWidth'], 90),
+        d: _d(j['layoutDepth'], 90),
+        height: _d(j['objectHeight'], 40),
+        rotation: _d(j['rotationDegrees'], 0),
       );
 }
 
