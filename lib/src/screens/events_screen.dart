@@ -88,13 +88,12 @@ class _EventCard extends StatelessWidget {
         subtitle: Text('$when\n${event.hallName} · ${event.seated ? 'Seated' : 'General admission'}'),
         isThreeLine: true,
         trailing: event.seated ? const Icon(Icons.event_seat) : const Icon(Icons.groups),
-        onTap: event.seated
-            ? () => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => SeatMapScreen(event: event)),
-                )
-            : null,
-        enabled: event.seated,
+        // Every event opens the venue view now: a hall may have seated and/or
+        // general-admission sections, and the screen adapts per section.
+        onTap: () => Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => SeatMapScreen(event: event)),
+        ),
       ),
     );
   }

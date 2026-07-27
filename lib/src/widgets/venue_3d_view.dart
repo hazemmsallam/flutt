@@ -21,11 +21,19 @@ class Venue3DView extends StatefulWidget {
     required this.map,
     required this.selectedIds,
     required this.onToggle,
+    this.selectedSectionId,
+    this.onSectionTap,
   });
 
   final SeatMap map;
   final Set<int> selectedIds;
   final ValueChanged<Seat> onToggle;
+
+  /// Currently selected general-admission section, if any (highlighted).
+  final int? selectedSectionId;
+
+  /// Called when the customer taps a selectable general-admission section.
+  final ValueChanged<VenueSection>? onSectionTap;
 
   @override
   State<Venue3DView> createState() => _Venue3DViewState();
@@ -84,10 +92,49 @@ class _Venue3DViewState extends State<Venue3DView> {
   void _onTapUp(TapUpDetails d) {
     final cam = _camera(_viewport);
     if (cam == null) return;
+    // Chairs take priority; a tap that misses every chair may still hit a GA section.
     final seat = _hitTestChair(cam, d.localPosition);
     if (seat != null && seat.selectable) {
       widget.onToggle(seat);
+      return;
     }
+    if (widget.onSectionTap != null) {
+      final section = _hitTestSection(cam, d.localPosition);
+      if (section != null) widget.onSectionTap!(section);
+    }
+  }
+
+  // A layout-pixel point mapped into world space at height [y].
+  _Vec3 _worldPoint(Offset p, double y) => _Vec3(
+        p.dx / _ppm - _worldWidth / 2,
+        y,
+        p.dy / _ppm - _worldDepth / 2,
+      );
+
+  VenueSection? _hitTestSection(_OrbitCamera cam, Offset p) {
+    VenueSection? best;
+    double bestDepth = double.infinity;
+    for (final section in widget.map.sections) {
+      if (!section.gaSelectable || !section.hasBoundary) continue;
+      final projected = <Offset>[];
+      var depth = 0.0;
+      var ok = true;
+      for (final pt in section.points) {
+        final pr = cam.project(_worldPoint(pt, 0.02));
+        if (pr == null) {
+          ok = false;
+          break;
+        }
+        projected.add(pr.screen);
+        depth += pr.depth;
+      }
+      if (!ok) continue;
+      if (_pointInPolygon(p, projected) && depth < bestDepth) {
+        bestDepth = depth;
+        best = section;
+      }
+    }
+    return best;
   }
 
   _OrbitCamera? _camera(Size size) {
@@ -156,6 +203,7 @@ class _Venue3DViewState extends State<Venue3DView> {
             painter: _VenuePainter(
               map: widget.map,
               selectedIds: widget.selectedIds,
+              selectedSectionId: widget.selectedSectionId,
               camera: cam,
               ppm: _ppm,
               worldWidth: _worldWidth,
@@ -339,6 +387,7 @@ class _VenuePainter extends CustomPainter {
   _VenuePainter({
     required this.map,
     required this.selectedIds,
+    required this.selectedSectionId,
     required this.camera,
     required this.ppm,
     required this.worldWidth,
@@ -347,6 +396,7 @@ class _VenuePainter extends CustomPainter {
 
   final SeatMap map;
   final Set<int> selectedIds;
+  final int? selectedSectionId;
   final _OrbitCamera? camera;
   final double ppm;
   final double worldWidth;
@@ -354,6 +404,91 @@ class _VenuePainter extends CustomPainter {
 
   static const _tableTop = Color(0xFFA5744A);
   static const _tablePedestal = Color(0xFF6B4423);
+
+  // Fallback palette (used when a section carries no colour) — dynamic, not category-based.
+  static const _palette = [
+    Color(0xFF2E75DC), Color(0xFF9A5CF5), Color(0xFF23A094), Color(0xFFE0803B),
+    Color(0xFFD8574F), Color(0xFF3FA34D), Color(0xFFB4497E), Color(0xFF5C6BC0),
+  ];
+
+  Color _sectionColor(VenueSection s) {
+    final hex = s.color;
+    if (hex != null && hex.isNotEmpty) {
+      var v = hex.replaceFirst('#', '');
+      if (v.length == 6) v = 'FF$v';
+      final n = int.tryParse(v, radix: 16);
+      if (n != null) return Color(n);
+    }
+    return _palette[s.id.abs() % _palette.length];
+  }
+
+  /// Draws each section's boundary as a translucent floor decal with an outline. Selectable GA
+  /// sections read brighter; the selected one is highlighted. Seated sections are context only.
+  void _paintSections(Canvas canvas, _OrbitCamera cam) {
+    for (final section in map.sections) {
+      if (!section.hasBoundary) continue;
+      final pts = <Offset>[];
+      var ok = true;
+      for (final p in section.points) {
+        final pr = cam.project(
+            _Vec3(p.dx / ppm - worldWidth / 2, 0.02, p.dy / ppm - worldDepth / 2));
+        if (pr == null) {
+          ok = false;
+          break;
+        }
+        pts.add(pr.screen);
+      }
+      if (!ok || pts.length < 3) continue;
+
+      final base = _sectionColor(section);
+      final selected = section.id == selectedSectionId;
+      final ga = section.isGeneralAdmission;
+      final fillAlpha = selected ? 0.55 : (ga && section.available > 0 ? 0.34 : 0.18);
+      final path = _poly(pts);
+      canvas.drawPath(path, Paint()..color = base.withOpacity(fillAlpha));
+      canvas.drawPath(
+          path,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = selected ? 2.4 : 1.4
+            ..color = base.withOpacity(0.95));
+
+      // Label GA sections with their name/price/availability at the polygon centroid.
+      if (ga) {
+        var cx = 0.0, cy = 0.0;
+        for (final o in pts) {
+          cx += o.dx;
+          cy += o.dy;
+        }
+        cx /= pts.length;
+        cy /= pts.length;
+        _paintSectionLabel(canvas, section, Offset(cx, cy));
+      }
+    }
+  }
+
+  void _paintSectionLabel(Canvas canvas, VenueSection s, Offset at) {
+    final priceText = s.price == null
+        ? ''
+        : '\n${s.price!.toStringAsFixed(2)} ${s.currency ?? ''}'.trimRight();
+    final avail = s.available > 0 ? '${s.available} left' : 'Sold out';
+    final tp = TextPainter(
+      text: TextSpan(
+        text: s.name,
+        style: const TextStyle(
+            color: Colors.white, fontWeight: FontWeight.w800, fontSize: 13),
+        children: [
+          TextSpan(
+              text: '$priceText\n$avail',
+              style: const TextStyle(
+                  color: Colors.white70, fontWeight: FontWeight.w500, fontSize: 11)),
+        ],
+      ),
+      textAlign: TextAlign.center,
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: 160);
+    tp.paint(canvas, at - Offset(tp.width / 2, tp.height / 2));
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -363,6 +498,7 @@ class _VenuePainter extends CustomPainter {
     canvas.drawColor(const Color(0xFF11151C), BlendMode.src);
 
     _paintFloor(canvas, cam);
+    _paintSections(canvas, cam);
 
     final faces = <_Face>[];
     _addStage(faces, cam);
@@ -527,5 +663,6 @@ class _VenuePainter extends CustomPainter {
   bool shouldRepaint(covariant _VenuePainter old) =>
       old.camera != camera ||
       old.map != map ||
-      old.selectedIds != selectedIds;
+      old.selectedIds != selectedIds ||
+      old.selectedSectionId != selectedSectionId;
 }

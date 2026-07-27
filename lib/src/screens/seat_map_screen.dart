@@ -26,6 +26,10 @@ class _SeatMapScreenState extends State<SeatMapScreen> {
   bool _holding = false;
   bool _use3D = true;
 
+  // General-admission selection (mutually exclusive with seat selection).
+  int? _gaSectionId;
+  int _gaQty = 1;
+
   @override
   void initState() {
     super.initState();
@@ -50,6 +54,13 @@ class _SeatMapScreenState extends State<SeatMapScreen> {
         // Drop any selections that were taken by someone else in the meantime.
         final live = {for (final s in map.seats) s.id: s};
         _selected.removeWhere((id) => live[id]?.selectable != true);
+        // Drop a GA selection whose section vanished or sold out.
+        final section = map.sectionById(_gaSectionId);
+        if (section == null || !section.gaSelectable) {
+          _gaSectionId = null;
+        } else if (_gaQty > section.available) {
+          _gaQty = section.available;
+        }
       });
     } catch (e) {
       if (!mounted || silent) return;
@@ -60,12 +71,24 @@ class _SeatMapScreenState extends State<SeatMapScreen> {
   double get _total {
     final map = _map;
     if (map == null) return 0;
+    final section = map.sectionById(_gaSectionId);
+    if (section != null) {
+      return (section.price ?? 0) * _gaQty;
+    }
     final byId = {for (final s in map.seats) s.id: s};
     return _selected.fold(0.0, (sum, id) => sum + (byId[id]?.price ?? 0));
   }
 
+  VenueSection? get _gaSection => _map?.sectionById(_gaSectionId);
+
   Future<void> _hold() async {
-    if (_selected.isEmpty || _holding) return;
+    if (_holding) return;
+    final section = _gaSection;
+    if (section != null) {
+      await _holdGa(section);
+      return;
+    }
+    if (_selected.isEmpty) return;
     setState(() => _holding = true);
     try {
       final booking = await _api.createBooking(widget.event.id, _selected.toList());
@@ -86,13 +109,49 @@ class _SeatMapScreenState extends State<SeatMapScreen> {
     }
   }
 
+  Future<void> _holdGa(VenueSection section) async {
+    setState(() => _holding = true);
+    try {
+      final booking =
+          await _api.createSectionBooking(widget.event.id, section.id, _gaQty);
+      if (!mounted) return;
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => BookingScreen(bookingId: booking.id, initial: booking)),
+      );
+      setState(() {
+        _gaSectionId = null;
+        _gaQty = 1;
+      });
+      _load(silent: true);
+    } on ApiException catch (e) {
+      _snack(e.message);
+      _load(silent: true);
+    } catch (e) {
+      _snack('$e');
+    } finally {
+      if (mounted) setState(() => _holding = false);
+    }
+  }
+
   void _snack(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
   void _toggleSeat(Seat seat) => setState(() {
+        _gaSectionId = null; // seats and a GA section can't be selected together
         if (!_selected.add(seat.id)) _selected.remove(seat.id);
+      });
+
+  void _selectSection(VenueSection section) => setState(() {
+        _selected.clear();
+        if (_gaSectionId == section.id) {
+          _gaSectionId = null;
+        } else {
+          _gaSectionId = section.id;
+          _gaQty = section.available > 0 ? 1 : 0;
+        }
       });
 
   @override
@@ -128,6 +187,7 @@ class _SeatMapScreenState extends State<SeatMapScreen> {
                       padding: EdgeInsets.symmetric(horizontal: 12),
                       child: Align(alignment: Alignment.centerLeft, child: SeatLegend()),
                     ),
+                    _gaSectionsBar(map),
                     const SizedBox(height: 6),
                     Expanded(
                       child: Container(
@@ -143,6 +203,8 @@ class _SeatMapScreenState extends State<SeatMapScreen> {
                                 map: map,
                                 selectedIds: _selected,
                                 onToggle: _toggleSeat,
+                                selectedSectionId: _gaSectionId,
+                                onSectionTap: _selectSection,
                               )
                             : SeatMapView(
                                 map: map,
@@ -157,7 +219,40 @@ class _SeatMapScreenState extends State<SeatMapScreen> {
     );
   }
 
+  /// A horizontal row of the hall's general-admission sections (view-independent), so GA is
+  /// always reachable even in the 2D map. Tapping a chip selects the section.
+  Widget _gaSectionsBar(SeatMap map) {
+    final ga = map.sections.where((s) => s.isGeneralAdmission).toList();
+    if (ga.isEmpty) return const SizedBox.shrink();
+    return SizedBox(
+      height: 52,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+        itemCount: ga.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (_, i) {
+          final s = ga[i];
+          final selected = s.id == _gaSectionId;
+          final priceText = s.price == null ? '' : ' · ${s.price!.toStringAsFixed(2)} ${s.currency ?? ''}';
+          return ChoiceChip(
+            selected: selected,
+            onSelected: s.gaSelectable ? (_) => _selectSection(s) : null,
+            label: Text(
+              '${s.name}$priceText · ${s.available > 0 ? '${s.available} left' : 'Sold out'}',
+              overflow: TextOverflow.ellipsis,
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   Widget _bottomBar() {
+    final section = _gaSection;
+    if (section != null) {
+      return _gaBottomBar(section);
+    }
     final count = _selected.length;
     return SafeArea(
       child: Padding(
@@ -181,6 +276,48 @@ class _SeatMapScreenState extends State<SeatMapScreen> {
               child: _holding
                   ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
                   : Text(count == 0 ? 'Select seats' : 'Hold $count seat${count == 1 ? '' : 's'}'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _gaBottomBar(VenueSection section) {
+    final currency = section.currency ?? '';
+    final canDecrement = _gaQty > 1;
+    final canIncrement = _gaQty < section.available;
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+        child: Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(section.name, style: const TextStyle(fontWeight: FontWeight.w700)),
+                  Text('Total ${_total.toStringAsFixed(2)} $currency',
+                      style: const TextStyle(color: Colors.black54)),
+                ],
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.remove_circle_outline),
+              onPressed: canDecrement ? () => setState(() => _gaQty--) : null,
+            ),
+            Text('$_gaQty', style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+            IconButton(
+              icon: const Icon(Icons.add_circle_outline),
+              onPressed: canIncrement ? () => setState(() => _gaQty++) : null,
+            ),
+            const SizedBox(width: 8),
+            FilledButton(
+              onPressed: _gaQty < 1 || _holding ? null : _hold,
+              child: _holding
+                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                  : Text('Hold $_gaQty'),
             ),
           ],
         ),

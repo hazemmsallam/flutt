@@ -1,9 +1,12 @@
-/// Live seat map for a seated event — the payload from GET /api/events/{id}/seats.
+import 'dart:ui' show Offset;
+
+/// Live seat map for an event — the payload from GET /api/events/{id}/seats.
 ///
 /// Coordinates are in the same logical-pixel space the admin editor uses: a
 /// [layoutWidth] x [layoutHeight] canvas, each seat placed by its top-left
 /// ([Seat.x], [Seat.y]), sized [Seat.w] x [Seat.h], rotated [Seat.rotation]
-/// degrees about its own centre. The client only scales and replays these.
+/// degrees about its own centre. Sections carry a boundary polygon in the same
+/// space. The client only scales and replays these.
 class SeatMap {
   SeatMap({
     required this.eventId,
@@ -16,6 +19,7 @@ class SeatMap {
     required this.bookedCount,
     required this.seats,
     required this.tables,
+    required this.sections,
   });
 
   final int eventId;
@@ -30,6 +34,9 @@ class SeatMap {
 
   /// Non-bookable layout objects (tables) — display only, never selectable.
   final List<VenueTable> tables;
+
+  /// First-class sections with dynamic name/price/mode/geometry and live availability.
+  final List<VenueSection> sections;
 
   factory SeatMap.fromJson(Map<String, dynamic> j) => SeatMap(
         eventId: j['eventId'] as int,
@@ -46,6 +53,81 @@ class SeatMap {
         tables: ((j['layoutObjects'] as List?) ?? const [])
             .map((e) => VenueTable.fromJson(e as Map<String, dynamic>))
             .toList(),
+        sections: ((j['sections'] as List?) ?? const [])
+            .map((e) => VenueSection.fromJson(e as Map<String, dynamic>))
+            .toList(),
+      );
+
+  VenueSection? sectionById(int? id) {
+    if (id == null) return null;
+    for (final s in sections) {
+      if (s.id == id) return s;
+    }
+    return null;
+  }
+}
+
+/// A section's booking behaviour — configuration-driven, never inferred from the name.
+enum SectionMode { seated, generalAdmission }
+
+SectionMode sectionModeOf(String? s) =>
+    s == 'GENERAL_ADMISSION' ? SectionMode.generalAdmission : SectionMode.seated;
+
+/// A first-class section: dynamic name/price/currency, booking mode, boundary polygon
+/// (layout-pixel points) and live availability. The app renders whatever it receives and
+/// never hardcodes names or prices.
+class VenueSection {
+  VenueSection({
+    required this.id,
+    required this.name,
+    required this.mode,
+    required this.price,
+    required this.currency,
+    required this.capacity,
+    required this.available,
+    required this.reserved,
+    required this.sold,
+    required this.points,
+    required this.color,
+  });
+
+  final int id;
+  final String name;
+  final SectionMode mode;
+  final double? price;
+  final String? currency;
+  final int capacity;
+  final int available;
+  final int reserved;
+  final int sold;
+
+  /// Boundary polygon in layout-pixel space (may be empty if the admin drew no boundary).
+  final List<Offset> points;
+  final String? color;
+
+  bool get isGeneralAdmission => mode == SectionMode.generalAdmission;
+  bool get hasBoundary => points.length >= 3;
+
+  /// A GA section the customer can buy into right now.
+  bool get gaSelectable => isGeneralAdmission && available > 0;
+
+  factory VenueSection.fromJson(Map<String, dynamic> j) => VenueSection(
+        id: j['id'] as int,
+        name: (j['name'] ?? '') as String,
+        mode: sectionModeOf(j['bookingMode'] as String?),
+        price: j['price'] == null ? null : _d(j['price'], 0),
+        currency: j['currency'] as String?,
+        capacity: (j['capacity'] ?? 0) as int,
+        available: (j['available'] ?? 0) as int,
+        reserved: (j['reserved'] ?? 0) as int,
+        sold: (j['sold'] ?? 0) as int,
+        points: ((j['points'] as List?) ?? const [])
+            .map((e) => Offset(
+                  _d((e as Map<String, dynamic>)['x'], 0),
+                  _d(e['y'], 0),
+                ))
+            .toList(),
+        color: j['color'] as String?,
       );
 }
 
@@ -141,6 +223,7 @@ class Seat {
     required this.h,
     required this.rotation,
     required this.sectionName,
+    required this.sectionId,
     required this.price,
     required this.status,
   });
@@ -154,6 +237,7 @@ class Seat {
   final double h;
   final double rotation; // degrees
   final String? sectionName;
+  final int? sectionId;
   final double price;
   final SeatStatus status;
 
@@ -169,6 +253,7 @@ class Seat {
         h: _d(j['layoutHeight'], 38),
         rotation: _d(j['rotationDegrees'], 0),
         sectionName: j['sectionName'] as String?,
+        sectionId: j['sectionId'] as int?,
         price: _d(j['price'], 0),
         status: _status(j['status'] as String?),
       );
