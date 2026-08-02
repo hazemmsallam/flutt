@@ -6,6 +6,7 @@ import '../api/api_client.dart';
 import '../models/event_summary.dart';
 import '../models/seat_map.dart';
 import '../widgets/seat_map_view.dart';
+import '../widgets/section_map_view.dart';
 import '../widgets/venue_3d_view.dart';
 import 'booking_screen.dart';
 
@@ -29,6 +30,10 @@ class _SeatMapScreenState extends State<SeatMapScreen> {
   // General-admission selection (mutually exclusive with seat selection).
   int? _gaSectionId;
   int _gaQty = 1;
+
+  /// The seated section the customer drilled into, if any. Null means we're showing the
+  /// section overview — the customer picks an area before they pick a seat.
+  int? _focusedSectionId;
 
   @override
   void initState() {
@@ -60,6 +65,10 @@ class _SeatMapScreenState extends State<SeatMapScreen> {
           _gaSectionId = null;
         } else if (_gaQty > section.available) {
           _gaQty = section.available;
+        }
+        // If the admin deleted the section we were browsing, fall back to the overview.
+        if (_focusedSectionId != null && map.sectionById(_focusedSectionId) == null) {
+          _focusedSectionId = null;
         }
       });
     } catch (e) {
@@ -154,11 +163,63 @@ class _SeatMapScreenState extends State<SeatMapScreen> {
         }
       });
 
+  /// A tap on a section in the overview. What it means depends entirely on how the admin
+  /// configured that section: seated areas open their seats, general-admission areas ask
+  /// how many tickets you want.
+  void _onSectionTap(VenueSection section) {
+    if (section.available <= 0) {
+      _snack('${section.name} is sold out.');
+      return;
+    }
+    if (section.isGeneralAdmission) {
+      _askQuantity(section);
+    } else {
+      setState(() {
+        _gaSectionId = null;
+        _focusedSectionId = section.id;
+      });
+    }
+  }
+
+  void _exitSection() => setState(() {
+        _focusedSectionId = null;
+        _selected.clear();
+      });
+
+  /// Quantity sheet for a general-admission section — the GA equivalent of picking seats.
+  Future<void> _askQuantity(VenueSection section) async {
+    final qty = await showModalBottomSheet<int>(
+      context: context,
+      showDragHandle: true,
+      builder: (_) => _QuantitySheet(section: section),
+    );
+    if (qty == null || !mounted) return;
+    setState(() {
+      _selected.clear();
+      _gaSectionId = section.id;
+      _gaQty = qty;
+    });
+    await _hold();
+  }
+
+  VenueSection? get _focused => _map?.sectionById(_focusedSectionId);
+
   @override
   Widget build(BuildContext context) {
     final map = _map;
+    final focused = _focused;
+
     return Scaffold(
-      appBar: AppBar(title: Text(widget.event.name)),
+      appBar: AppBar(
+        title: Text(focused?.name ?? widget.event.name),
+        leading: focused == null
+            ? null
+            : IconButton(
+                icon: const Icon(Icons.arrow_back),
+                tooltip: 'All sections',
+                onPressed: _exitSection,
+              ),
+      ),
       body: _error != null && map == null
           ? _errorBody()
           : map == null
@@ -169,8 +230,14 @@ class _SeatMapScreenState extends State<SeatMapScreen> {
                       padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
                       child: Row(
                         children: [
-                          Expanded(child: Text('${map.hallName} · ${map.availableCount} available',
-                              style: const TextStyle(color: Colors.black54))),
+                          Expanded(
+                            child: Text(
+                              focused == null
+                                  ? '${map.hallName} · tap a section to begin'
+                                  : '${focused.name} · ${focused.available} seats available',
+                              style: const TextStyle(color: Colors.black54),
+                            ),
+                          ),
                           _ViewToggle(
                             use3D: _use3D,
                             onChanged: (v) => setState(() => _use3D = v),
@@ -183,11 +250,15 @@ class _SeatMapScreenState extends State<SeatMapScreen> {
                         ],
                       ),
                     ),
-                    const Padding(
-                      padding: EdgeInsets.symmetric(horizontal: 12),
-                      child: Align(alignment: Alignment.centerLeft, child: SeatLegend()),
-                    ),
-                    _gaSectionsBar(map),
+                    // The seat legend only means anything once seats are on screen.
+                    if (focused != null || _use3D)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 12),
+                        child: Align(alignment: Alignment.centerLeft, child: SeatLegend()),
+                      ),
+                    // Chips are a fallback for GA sections the admin never drew a boundary
+                    // for — without them those sections would be unreachable on the map.
+                    if (focused == null) _gaSectionsBar(map),
                     const SizedBox(height: 6),
                     Expanded(
                       child: Container(
@@ -206,11 +277,18 @@ class _SeatMapScreenState extends State<SeatMapScreen> {
                                 selectedSectionId: _gaSectionId,
                                 onSectionTap: _selectSection,
                               )
-                            : SeatMapView(
-                                map: map,
-                                selectedIds: _selected,
-                                onToggle: _toggleSeat,
-                              ),
+                            : focused == null
+                                ? SectionMapView(
+                                    map: map,
+                                    onSectionTap: _onSectionTap,
+                                    selectedSectionId: _gaSectionId,
+                                  )
+                                : SeatMapView(
+                                    map: map,
+                                    selectedIds: _selected,
+                                    onToggle: _toggleSeat,
+                                    focus: focused,
+                                  ),
                       ),
                     ),
                   ],
@@ -237,7 +315,7 @@ class _SeatMapScreenState extends State<SeatMapScreen> {
           final priceText = s.price == null ? '' : ' · ${s.price!.toStringAsFixed(2)} ${s.currency ?? ''}';
           return ChoiceChip(
             selected: selected,
-            onSelected: s.gaSelectable ? (_) => _selectSection(s) : null,
+            onSelected: s.gaSelectable ? (_) => _onSectionTap(s) : null,
             label: Text(
               '${s.name}$priceText · ${s.available > 0 ? '${s.available} left' : 'Sold out'}',
               overflow: TextOverflow.ellipsis,
@@ -252,6 +330,19 @@ class _SeatMapScreenState extends State<SeatMapScreen> {
     final section = _gaSection;
     if (section != null) {
       return _gaBottomBar(section);
+    }
+    // In the overview there is nothing to total up yet — say what to do instead.
+    if (_focusedSectionId == null && !_use3D) {
+      return const SafeArea(
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(16, 12, 16, 16),
+          child: Text(
+            'Tap a section to choose seats or tickets',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.black54, fontWeight: FontWeight.w600),
+          ),
+        ),
+      );
     }
     final count = _selected.length;
     return SafeArea(
@@ -338,6 +429,88 @@ class _SeatMapScreenState extends State<SeatMapScreen> {
           ),
         ),
       );
+}
+
+/// Asks how many tickets to buy in a general-admission section — the GA counterpart to
+/// picking seats. Capped at what is actually left, so the customer can't compose a request
+/// the server will only reject.
+class _QuantitySheet extends StatefulWidget {
+  const _QuantitySheet({required this.section});
+  final VenueSection section;
+
+  @override
+  State<_QuantitySheet> createState() => _QuantitySheetState();
+}
+
+class _QuantitySheetState extends State<_QuantitySheet> {
+  int _qty = 1;
+
+  @override
+  Widget build(BuildContext context) {
+    final s = widget.section;
+    final currency = s.currency ?? '';
+    final unit = s.price ?? 0;
+    final max = s.available;
+
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(s.name, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 4),
+            Text(
+              s.price == null
+                  ? 'Standing · $max available'
+                  : '${unit.toStringAsFixed(2)} $currency each · $max available',
+              style: const TextStyle(color: Colors.black54),
+            ),
+            const SizedBox(height: 24),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                IconButton.filledTonal(
+                  iconSize: 28,
+                  icon: const Icon(Icons.remove),
+                  onPressed: _qty > 1 ? () => setState(() => _qty--) : null,
+                ),
+                SizedBox(
+                  width: 96,
+                  child: Text(
+                    '$_qty',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 34, fontWeight: FontWeight.w800),
+                  ),
+                ),
+                IconButton.filledTonal(
+                  iconSize: 28,
+                  icon: const Icon(Icons.add),
+                  onPressed: _qty < max ? () => setState(() => _qty++) : null,
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Total ${(unit * _qty).toStringAsFixed(2)} $currency',
+                    style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                  ),
+                ),
+                FilledButton(
+                  onPressed: max < 1 ? null : () => Navigator.pop(context, _qty),
+                  child: Text('Hold $_qty ticket${_qty == 1 ? '' : 's'}'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 /// Small segmented control to switch between the 3D venue and the flat 2D map.

@@ -24,9 +24,11 @@ class ApiClient {
 
   Uri _uri(String path) => Uri.parse('${Config.baseUrl}$path');
 
+  /// The server derives the buyer from this header alone — identity is never sent in a body,
+  /// so it cannot be rotated per request to dodge the per-user hold quota or rate limit.
   Map<String, String> get _headers => {
         'Content-Type': 'application/json',
-        'X-Customer-Ref': Config.customerRef,
+        'Authorization': 'Bearer ${Config.customerRef}',
       };
 
   // ---- events -------------------------------------------------------------
@@ -50,7 +52,6 @@ class ApiClient {
       headers: _headers,
       body: jsonEncode({
         'eventId': eventId,
-        'customerRef': Config.customerRef,
         'seatIds': seatIds,
       }),
     );
@@ -64,7 +65,6 @@ class ApiClient {
       headers: _headers,
       body: jsonEncode({
         'eventId': eventId,
-        'customerRef': Config.customerRef,
         'sectionId': sectionId,
         'quantity': quantity,
       }),

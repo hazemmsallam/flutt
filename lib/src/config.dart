@@ -11,7 +11,7 @@ class Config {
   /// - Windows/desktop, web, iOS simulator: use localhost (default)
   /// - Android emulator reaches the host machine at 10.0.2.2 instead
   /// - A physical device needs your machine's LAN IP (e.g. http://192.168.1.20:8080)
-  static const String baseUrl = 'http://localhost:8089';
+  static const String baseUrl = 'https://uncounted-freehand-appetite.ngrok-free.dev';
 
   static const _customerRefKey = 'customerRef';
   static String? _customerRef;

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../models/seat_map.dart';
 import '../theme/seat_colors.dart';
+import 'section_map_view.dart' show sectionColor;
 
 /// Renders a [SeatMap] by replaying the stored logical-pixel coordinates.
 ///
@@ -11,25 +12,61 @@ import '../theme/seat_colors.dart';
 /// in an [InteractiveViewer] so the user can pinch-zoom and pan. Each seat is a
 /// [Positioned] + [Transform.rotate] tile, so rotation and per-seat size from the
 /// admin layout show up faithfully, and tap hit-testing is per widget.
+///
+/// Pass [focus] to drill into one seated section: only that section's seats are drawn,
+/// the view scales to the section's own bounds so the seats fill the screen, and the
+/// section outline is kept as a faint backdrop for orientation. Seat positions are never
+/// recomputed — they stay exactly where the admin put them, just viewed more closely.
 class SeatMapView extends StatelessWidget {
   const SeatMapView({
     super.key,
     required this.map,
     required this.selectedIds,
     required this.onToggle,
+    this.focus,
   });
 
   final SeatMap map;
   final Set<int> selectedIds;
   final ValueChanged<Seat> onToggle;
+  final VenueSection? focus;
 
   @override
   Widget build(BuildContext context) {
+    final section = focus;
+    final seats = section == null
+        ? map.seats
+        : map.seats.where((s) => s.sectionId == section.id).toList();
+
+    if (section != null && seats.isEmpty) {
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Text(
+            'No seats have been placed in this section yet.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.black54),
+          ),
+        ),
+      );
+    }
+
+    // Drilling in fits the section's bounding box (padded) instead of the whole hall,
+    // so a small block of seats doesn't render as unreadable specks.
+    final bounds = section == null ? null : _paddedBounds(section, seats);
+
     return LayoutBuilder(
       builder: (context, constraints) {
-        final scale = constraints.maxWidth / map.layoutWidth;
-        final w = map.layoutWidth * scale;
-        final h = map.layoutHeight * scale;
+        final srcW = bounds?.width ?? map.layoutWidth;
+        final srcH = bounds?.height ?? map.layoutHeight;
+        final scale = bounds == null
+            ? constraints.maxWidth / map.layoutWidth
+            : math.min(constraints.maxWidth / srcW, constraints.maxHeight / srcH);
+
+        final dx = -(bounds?.left ?? 0) * scale;
+        final dy = -(bounds?.top ?? 0) * scale;
+        final w = srcW * scale;
+        final h = srcH * scale;
 
         return InteractiveViewer(
           constrained: false,
@@ -41,11 +78,22 @@ class SeatMapView extends StatelessWidget {
             height: h,
             child: Stack(
               children: [
-                _Stage(width: w, scale: scale),
-                for (final seat in map.seats)
+                if (section == null)
+                  _Stage(width: w, scale: scale)
+                else
+                  Positioned.fill(
+                    child: CustomPaint(
+                      painter: _SectionOutline(
+                        section: section,
+                        scale: scale,
+                        offset: Offset(dx, dy),
+                      ),
+                    ),
+                  ),
+                for (final seat in seats)
                   Positioned(
-                    left: seat.x * scale,
-                    top: seat.y * scale,
+                    left: seat.x * scale + dx,
+                    top: seat.y * scale + dy,
                     width: seat.w * scale,
                     height: seat.h * scale,
                     child: Transform.rotate(
@@ -64,6 +112,66 @@ class SeatMapView extends StatelessWidget {
       },
     );
   }
+
+  /// The section polygon unioned with its seats, padded so edge seats aren't clipped.
+  Rect _paddedBounds(VenueSection section, List<Seat> seats) {
+    var minX = double.infinity, minY = double.infinity;
+    var maxX = -double.infinity, maxY = -double.infinity;
+
+    void add(double x, double y) {
+      minX = math.min(minX, x);
+      minY = math.min(minY, y);
+      maxX = math.max(maxX, x);
+      maxY = math.max(maxY, y);
+    }
+
+    for (final p in section.points) {
+      add(p.dx, p.dy);
+    }
+    for (final s in seats) {
+      add(s.x, s.y);
+      add(s.x + s.w, s.y + s.h);
+    }
+    if (minX == double.infinity) return Rect.zero;
+
+    const pad = 24.0;
+    return Rect.fromLTRB(minX - pad, minY - pad, maxX + pad, maxY + pad);
+  }
+}
+
+/// The focused section's boundary, drawn behind its seats purely for orientation.
+class _SectionOutline extends CustomPainter {
+  _SectionOutline({required this.section, required this.scale, required this.offset});
+
+  final VenueSection section;
+  final double scale;
+  final Offset offset;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (!section.hasBoundary) return;
+    final c = sectionColor(section);
+    final path = Path()
+      ..moveTo(section.points.first.dx * scale + offset.dx,
+          section.points.first.dy * scale + offset.dy);
+    for (final p in section.points.skip(1)) {
+      path.lineTo(p.dx * scale + offset.dx, p.dy * scale + offset.dy);
+    }
+    path.close();
+
+    canvas.drawPath(path, Paint()..color = c.withOpacity(0.10));
+    canvas.drawPath(
+      path,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5
+        ..color = c.withOpacity(0.55),
+    );
+  }
+
+  @override
+  bool shouldRepaint(_SectionOutline old) =>
+      old.section != section || old.scale != scale || old.offset != offset;
 }
 
 class _Stage extends StatelessWidget {
