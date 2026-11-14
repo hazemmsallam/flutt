@@ -70,8 +70,9 @@ class SeatMap {
 /// A section's booking behaviour — configuration-driven, never inferred from the name.
 enum SectionMode { seated, generalAdmission }
 
-SectionMode sectionModeOf(String? s) =>
-    s == 'GENERAL_ADMISSION' ? SectionMode.generalAdmission : SectionMode.seated;
+SectionMode sectionModeOf(String? s) => s == 'GENERAL_ADMISSION'
+    ? SectionMode.generalAdmission
+    : SectionMode.seated;
 
 /// A first-class section: dynamic name/price/currency, booking mode, boundary polygon
 /// (layout-pixel points) and live availability. The app renders whatever it receives and
@@ -83,6 +84,7 @@ class VenueSection {
     required this.mode,
     required this.price,
     required this.currency,
+    this.serviceFeePerTicket = 1,
     required this.capacity,
     required this.available,
     required this.reserved,
@@ -96,6 +98,7 @@ class VenueSection {
   final SectionMode mode;
   final double? price;
   final String? currency;
+  final double serviceFeePerTicket;
   final int capacity;
   final int available;
   final int reserved;
@@ -114,6 +117,7 @@ class VenueSection {
   factory VenueSection.fromJson(Map<String, dynamic> j) => VenueSection(
         id: j['id'] as int,
         name: (j['name'] ?? '') as String,
+        serviceFeePerTicket: _d(j['serviceFeePerTicket'], 1),
         mode: sectionModeOf(j['bookingMode'] as String?),
         price: j['price'] == null ? null : _d(j['price'], 0),
         currency: j['currency'] as String?,

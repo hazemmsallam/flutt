@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'src/config.dart';
 import 'src/screens/events_screen.dart';
+import 'src/theme/app_theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -17,11 +18,7 @@ class TicketingApp extends StatelessWidget {
     return MaterialApp(
       title: 'Ticketing',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        useMaterial3: true,
-        colorSchemeSeed: const Color(0xFF4F46E5),
-        scaffoldBackgroundColor: const Color(0xFFF5F6FA),
-      ),
+      theme: buildAppTheme(),
       home: const EventsScreen(),
     );
   }

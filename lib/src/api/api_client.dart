@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import '../config.dart';
 import '../models/booking.dart';
 import '../models/event_summary.dart';
+import '../models/event_detail.dart';
 import '../models/seat_map.dart';
 
 /// Error carrying the API's user-facing message (backend returns `{ "message": ... }`).
@@ -34,39 +35,39 @@ class ApiClient {
   // ---- events -------------------------------------------------------------
 
   Future<List<EventSummary>> availableEvents() async {
-    final res = await _http.get(_uri('/api/events/available'), headers: _headers);
+    final res =
+        await _http.get(_uri('/api/events/available'), headers: _headers);
     final list = _ok(res) as List;
-    return list.map((e) => EventSummary.fromJson(e as Map<String, dynamic>)).toList();
+    return list
+        .map((e) => EventSummary.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 
   Future<SeatMap> seatMap(int eventId) async {
-    final res = await _http.get(_uri('/api/events/$eventId/seats'), headers: _headers);
+    final res =
+        await _http.get(_uri('/api/events/$eventId/seats'), headers: _headers);
     return SeatMap.fromJson(_ok(res) as Map<String, dynamic>);
+  }
+
+  Future<EventDetail> eventDetail(int eventId) async {
+    final res =
+        await _http.get(_uri('/api/events/$eventId'), headers: _headers);
+    return EventDetail.fromJson(_ok(res) as Map<String, dynamic>);
   }
 
   // ---- bookings -----------------------------------------------------------
 
-  Future<Booking> createBooking(int eventId, List<int> seatIds) async {
+  Future<Booking> createBooking(int eventId, List<int> seatIds,
+      {Map<int, int> generalAdmission = const {}}) async {
     final res = await _http.post(
       _uri('/api/bookings'),
       headers: _headers,
       body: jsonEncode({
         'eventId': eventId,
         'seatIds': seatIds,
-      }),
-    );
-    return Booking.fromJson(_ok(res) as Map<String, dynamic>);
-  }
-
-  /// Books [quantity] general-admission tickets in [sectionId].
-  Future<Booking> createSectionBooking(int eventId, int sectionId, int quantity) async {
-    final res = await _http.post(
-      _uri('/api/bookings'),
-      headers: _headers,
-      body: jsonEncode({
-        'eventId': eventId,
-        'sectionId': sectionId,
-        'quantity': quantity,
+        'generalAdmission': generalAdmission.entries
+            .map((e) => {'sectionId': e.key, 'quantity': e.value})
+            .toList(),
       }),
     );
     return Booking.fromJson(_ok(res) as Map<String, dynamic>);
@@ -80,23 +81,28 @@ class ApiClient {
   Future<List<Booking>> myBookings() async {
     final res = await _http.get(_uri('/api/bookings'), headers: _headers);
     final list = _ok(res) as List;
-    return list.map((e) => Booking.fromJson(e as Map<String, dynamic>)).toList();
+    return list
+        .map((e) => Booking.fromJson(e as Map<String, dynamic>))
+        .toList();
   }
 
   Future<PaymentResult> pay(int id) async {
-    final res = await _http.post(_uri('/api/bookings/$id/payment'), headers: _headers);
+    final res =
+        await _http.post(_uri('/api/bookings/$id/payment'), headers: _headers);
     return PaymentResult.fromJson(_ok(res) as Map<String, dynamic>);
   }
 
   Future<Booking> cancel(int id) async {
-    final res = await _http.delete(_uri('/api/bookings/$id'), headers: _headers);
+    final res =
+        await _http.delete(_uri('/api/bookings/$id'), headers: _headers);
     return Booking.fromJson(_ok(res) as Map<String, dynamic>);
   }
 
   // ---- helpers ------------------------------------------------------------
 
   dynamic _ok(http.Response res) {
-    final body = res.body.isEmpty ? null : jsonDecode(utf8.decode(res.bodyBytes));
+    final body =
+        res.body.isEmpty ? null : jsonDecode(utf8.decode(res.bodyBytes));
     if (res.statusCode >= 200 && res.statusCode < 300) {
       return body;
     }
